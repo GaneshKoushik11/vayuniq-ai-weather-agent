@@ -215,7 +215,9 @@ body {
 }
 
 .bubble {
-  max-width: 78%;
+  max-width: 85%; /* Gives standard breathing room on the sides of the chat timeline */
+min-width: 0;    /* Allows the card to compress without breaking constraints */
+word-break: break-word;
   padding: 12px 14px;
   border-radius: 14px;
   font-size: 14.5px;
@@ -543,19 +545,28 @@ body {
     max-width: 88%;
   }
 }
-/* Forces the inner Markdown content block to expand fully when block elements are present */
+/* Ensure the markdown content block handles horizontal constraints neatly */
 .markdown-content {
     width: 100%;
-    min-w: 0;
+    min-width: 0; /* CRITICAL: Allows child elements to shrink below their content size */
+    display: flex;
+    flex-direction: column;
 }
 
-/* When an assistant message contains a chart wrapper, make sure the bubble breaks out of standard text inline compression rules */
-.bubble-assistant:has(.dynamic-chart-wrapper) {
+/* Target assistant bubbles with tables to give them maximum space on mobile devices */
+.bubble-assistant:has(table) {
     width: 100%;
-    max-width: 600px; /* Adjust this value depending on how wide you want your chat panels to display */
+    max-width: 92%; /* Widens the bubble slightly just for dense data tables */
 }
 
-/* Prevents flex items from collapsing chart elements if you change bubble display types later */
-.dynamic-chart-wrapper {
-    flex-shrink: 0;
+@media (max-width: 640px) {
+    .bubble-assistant:has(table) {
+        max-width: 100%; /* Spans full screen width on tiny mobile devices to maximize row readability */
+    }
+    
+    .markdown-content th, 
+    .markdown-content td {
+        padding-left: 10px !important;
+        padding-right: 10px !important;
+    }
 }
