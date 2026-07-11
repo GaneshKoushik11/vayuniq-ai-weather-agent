@@ -129,7 +129,7 @@ function weatherThemeFromTrace(trace?: TraceStep[]): WeatherTheme | null {
 
 // XHR adapter is required (not the fetch adapter) so onDownloadProgress can
 // read the partial response body via xhr.responseText while streaming.
-const api = axios.create({ baseURL: "/api", adapter: "xhr" });
+const api = axios.create({ baseURL: import.meta.env.VITE_API_URL ?? "/api", adapter: "xhr" });
 
 // ---------------------------------------------------------------------------
 // Helpers
