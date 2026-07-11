@@ -1,0 +1,35 @@
+{
+    "name": "vayuniq-server",
+    "version": "1.0.0",
+    "description": "Backend server for the Vayuniq AI Weather Agent, built with Node.js, Express, TypeScript, and Groq. It orchestrates AI-driven weather conversations through tool calling, weather API integration, and RESTful APIs.",
+    "license": "ISC",
+    "author": "Ganesh Koushik P S",
+    "type": "commonjs",
+    "main": "dist/index.js",
+    "scripts": {
+        "dev": "nodemon --watch src --ext ts --exec ts-node src/index.ts",
+        "build": "tsc",
+        "start": "node dist/index.js",
+        "lint": "eslint . --ext .ts",
+        "format": "prettier --write ."
+    },
+    "dependencies": {
+        "axios": "^1.9.0",
+        "cors": "^2.8.6",
+        "dotenv": "^16.6.1",
+        "express": "^4.22.2",
+        "groq-sdk": "^1.3.0"
+    },
+    "devDependencies": {
+        "@types/cors": "^2.8.19",
+        "@types/express": "^5.0.3",
+        "@types/node": "^24.0.0",
+        "@typescript-eslint/eslint-plugin": "^8.35.1",
+        "@typescript-eslint/parser": "^8.35.1",
+        "eslint": "^9.30.0",
+        "nodemon": "^3.1.14",
+        "prettier": "^3.6.2",
+        "ts-node": "^10.9.2",
+        "typescript": "^5.9.3"
+    }
+}
