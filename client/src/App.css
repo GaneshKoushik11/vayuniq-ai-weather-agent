@@ -543,3 +543,19 @@ body {
     max-width: 88%;
   }
 }
+/* Forces the inner Markdown content block to expand fully when block elements are present */
+.markdown-content {
+    width: 100%;
+    min-w: 0;
+}
+
+/* When an assistant message contains a chart wrapper, make sure the bubble breaks out of standard text inline compression rules */
+.bubble-assistant:has(.dynamic-chart-wrapper) {
+    width: 100%;
+    max-width: 600px; /* Adjust this value depending on how wide you want your chat panels to display */
+}
+
+/* Prevents flex items from collapsing chart elements if you change bubble display types later */
+.dynamic-chart-wrapper {
+    flex-shrink: 0;
+}

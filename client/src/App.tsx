@@ -199,9 +199,26 @@ function MessageContentRenderer({ text }: { text: string }) {
         <div>
             {cleanMarkdownText && <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanMarkdownText}</ReactMarkdown>}
             
+            // Find this inside your App.tsx file:
             {parseSuccess && chartDataArray.length > 0 && (
-                <div className="dynamic-chart-wrapper" style={{ width: "100%", height: 260, marginTop: "12px", marginBottom: "12px", background: "rgba(255,255,255,0.06)", padding: "12px", borderRadius: "8px" }}>
+                /* We add w-full block, a min-width boundary, and clear box sizing so padding doesn't pinch the chart space */
+                <div 
+                    className="dynamic-chart-wrapper" 
+                    style={{ 
+                        display: "block",
+                        width: "100%", 
+                        minWidth: "280px", /* Prevents extreme compression when parent width isn't fully initialized */
+                        height: 260, 
+                        marginTop: "12px", 
+                        marginBottom: "12px", 
+                        background: "rgba(255,255,255,0.06)", 
+                        padding: "16px 12px 12px 12px", /* Extra top padding gives chart layout elements breathing room */
+                        borderRadius: "8px",
+                        boxSizing: "border-box"
+                    }}
+                >
                     <ResponsiveContainer width="100%" height="100%">
+                        {/* The rest of your BarChart code remains exactly the same... */}
                         <BarChart data={chartDataArray} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
                             <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} tickLine={false} />
