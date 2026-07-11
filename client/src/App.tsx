@@ -73,8 +73,8 @@ interface ErrorEvent {
 
 const EXAMPLE_PROMPTS: { text: string; icon: string }[] = [
     { text: "What's the weather in Bengaluru right now?", icon: "☀️" },
-    { text: "Compare the weather in Tokyo and Reykjavik today in a table.", icon: "🌍" },
-    { text: "Create a data chart comparing the temperature between Paris and Miami.", icon: "📊" },
+    { text: "Compare the weather in Bengaluru and Hyderabad today in a table.", icon: "🌍" },
+    { text: "Create a data chart comparing the temperature between Mumbai and Chennai.", icon: "📊" },
 ];
 
 const TOOL_LABEL: Record<string, string> = {
@@ -168,12 +168,39 @@ function applySSEEvent(message: ChatMessage, event: string, parsed: TokenEvent |
 // ---------------------------------------------------------------------------
 // Dynamic Chart Pipeline Component
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Themed markdown renderer — every place we render model text funnels
+// through this so tables (and other elements) get one consistent,
+// legible style instead of the browser's cramped table defaults.
+// ---------------------------------------------------------------------------
+
+const markdownComponents = {
+    table: ({ node, ...props }: any) => (
+        <div className="md-table-wrap">
+            <table className="md-table" {...props} />
+        </div>
+    ),
+    thead: ({ node, ...props }: any) => <thead className="md-thead" {...props} />,
+    tbody: ({ node, ...props }: any) => <tbody className="md-tbody" {...props} />,
+    tr: ({ node, ...props }: any) => <tr className="md-tr" {...props} />,
+    th: ({ node, ...props }: any) => <th className="md-th" {...props} />,
+    td: ({ node, ...props }: any) => <td className="md-td" {...props} />,
+};
+
+function Markdown({ children }: { children: string }) {
+    return (
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+            {children}
+        </ReactMarkdown>
+    );
+}
+
 function MessageContentRenderer({ text }: { text: string }) {
     const chartStartTag = "[CHART_DATA]";
     const chartEndTag = "[/CHART_DATA]";
 
     if (!text.includes(chartStartTag)) {
-        return <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>;
+        return <Markdown>{text}</Markdown>;
     }
 
     const parts = text.split(chartStartTag);
@@ -197,9 +224,8 @@ function MessageContentRenderer({ text }: { text: string }) {
 
     return (
         <div>
-            {cleanMarkdownText && <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanMarkdownText}</ReactMarkdown>}
+            {cleanMarkdownText && <Markdown>{cleanMarkdownText}</Markdown>}
             
-            // Find this inside your App.tsx file:
             {parseSuccess && chartDataArray.length > 0 && (
                 /* We add w-full block, a min-width boundary, and clear box sizing so padding doesn't pinch the chart space */
                 <div 
@@ -233,7 +259,7 @@ function MessageContentRenderer({ text }: { text: string }) {
                 </div>
             )}
 
-            {tailingMarkdownText && <ReactMarkdown remarkPlugins={[remarkGfm]}>{tailingMarkdownText}</ReactMarkdown>}
+            {tailingMarkdownText && <Markdown>{tailingMarkdownText}</Markdown>}
         </div>
     );
 }
@@ -544,16 +570,31 @@ export default function App() {
                 })}
             </main>
             <footer className="composer">
-                <textarea
-                    ref={textareaRef}
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={onKeyDown}
-                    placeholder="Message Vayuniq…"
-                    rows={1}
-                    enterKeyHint="send"
-                />
-                <button className="send-btn" onClick={() => send(input)} disabled={loading || !input.trim()}>Send</button>
+                <div className="composer-bar">
+                    <textarea
+                        ref={textareaRef}
+                        className="composer-input"
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onKeyDown={onKeyDown}
+                        placeholder="Message Vayuniq…"
+                        rows={1}
+                        enterKeyHint="send"
+                    />
+                    <button
+                        type="button"
+                        className="send-btn"
+                        onClick={() => send(input)}
+                        disabled={loading || !input.trim()}
+                        aria-label="Send message"
+                    >
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M12 19V5" />
+                            <path d="M5 12l7-7 7 7" />
+                        </svg>
+                    </button>
+                </div>
+                <p className="composer-hint">Enter to send · Shift + Enter for a new line</p>
             </footer>
         </div>
     );
