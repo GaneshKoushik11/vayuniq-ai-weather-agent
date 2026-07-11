@@ -146,11 +146,6 @@ function parseSSEBlock(block: string): SSEBlock {
     return { event, data };
 }
 
-/** Splits a raw SSE text chunk into individual non-empty, non-heartbeat blocks. */
-function splitSSEBlocks(text: string): string[] {
-    return text.split("\n\n").filter((block) => block.trim() && !block.startsWith(":"));
-}
-
 /** Applies one parsed SSE event to an assistant message, returning the updated message. */
 function applySSEEvent(message: ChatMessage, event: string, parsed: TokenEvent | TraceStep | DoneEvent | ErrorEvent): ChatMessage {
     switch (event) {
