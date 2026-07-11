@@ -381,6 +381,7 @@ export default function App() {
     const [loading, setLoading] = useState(false);
     const [status, setStatus] = useState<StatusState>({ ok: null, model: "", keyConfigured: true });
     const listRef = useRef<HTMLElement>(null);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
 
     const fetchHealth = useCallback(async () => {
         try {
@@ -398,6 +399,16 @@ export default function App() {
     useEffect(() => {
         listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
     }, [messages, loading]);
+
+    // Auto-grow the composer textarea with its content (capped by the
+    // max-height set in App.css) so the sticky footer expands naturally on
+    // any screen size instead of relying on a fixed row count.
+    useEffect(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.style.height = "auto";
+        el.style.height = `${el.scrollHeight}px`;
+    }, [input]);
 
     const messagesRef = useRef<ChatMessage[]>(messages);
     const loadingRef = useRef(loading);
@@ -532,9 +543,16 @@ export default function App() {
                     );
                 })}
             </main>
-
             <footer className="composer">
-                <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={onKeyDown} placeholder="Message Vayuniq… (Enter to send, Shift+Enter for a new line)" rows={1} />
+                <textarea
+                    ref={textareaRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={onKeyDown}
+                    placeholder="Message Vayuniq…"
+                    rows={1}
+                    enterKeyHint="send"
+                />
                 <button className="send-btn" onClick={() => send(input)} disabled={loading || !input.trim()}>Send</button>
             </footer>
         </div>

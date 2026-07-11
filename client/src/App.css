@@ -39,9 +39,16 @@ body {
 .app {
   display: flex;
   flex-direction: column;
+  width: 100%;
+  /* dvh tracks the *visible* viewport, so mobile browser chrome (and the
+     keyboard on iOS/Android) collapsing/expanding doesn't leave the footer
+     stranded off-screen or clipped behind the URL bar. vh is the fallback
+     for browsers that don't support dvh yet. */
   height: 100vh;
+  height: 100dvh;
   max-width: 760px;
   margin: 0 auto;
+  overflow: hidden; /* only .chat scrolls internally; app shell stays fixed */
   border-left: 1px solid var(--border);
   border-right: 1px solid var(--border);
   background:
@@ -57,7 +64,14 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  row-gap: 8px;
   padding: 16px 20px;
+  /* keep the header clear of notches/status bars on iOS/Android when
+     the app is installed or run edge-to-edge */
+  padding-top: max(16px, env(safe-area-inset-top));
+  padding-left: max(20px, env(safe-area-inset-left));
+  padding-right: max(20px, env(safe-area-inset-right));
   border-bottom: 1px solid var(--border);
   background: linear-gradient(180deg, rgba(56, 189, 248, 0.06), transparent);
   flex-shrink: 0;
@@ -67,6 +81,7 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 
 .brand-mark {
@@ -81,8 +96,11 @@ body {
 .brand-name {
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: 17px;
+  font-size: clamp(14px, 4vw, 17px);
   letter-spacing: 0.06em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   background: linear-gradient(90deg, var(--text) 40%, var(--teal));
   -webkit-background-clip: text;
   background-clip: text;
@@ -92,7 +110,9 @@ body {
 .header-meta {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .badge {
@@ -132,8 +152,14 @@ body {
 
 .chat {
   flex: 1;
+  min-height: 0; /* required so this flex child can actually shrink/scroll
+                    instead of pushing the sticky footer off-screen */
   overflow-y: auto;
+  overscroll-behavior-y: contain; /* stop scroll chaining from bouncing the whole page on iOS/Android */
+  -webkit-overflow-scrolling: touch;
   padding: 24px 20px;
+  padding-left: max(20px, env(safe-area-inset-left));
+  padding-right: max(20px, env(safe-area-inset-right));
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -216,8 +242,8 @@ body {
 
 .bubble {
   max-width: 85%; /* Gives standard breathing room on the sides of the chat timeline */
-min-width: 0;    /* Allows the card to compress without breaking constraints */
-word-break: break-word;
+  min-width: 0;    /* Allows the card to compress without breaking constraints */
+  word-break: break-word;
   padding: 12px 14px;
   border-radius: 14px;
   font-size: 14.5px;
@@ -484,12 +510,25 @@ word-break: break-word;
   gap: 10px;
   align-items: flex-end;
   padding: 14px 20px 20px;
+  /* env() pads out the home-indicator area on iOS/Android so the send
+     button never sits under the gesture bar; falls back to 20px elsewhere */
+  padding-bottom: max(20px, env(safe-area-inset-bottom));
+  padding-left: max(20px, env(safe-area-inset-left));
+  padding-right: max(20px, env(safe-area-inset-right));
   border-top: 1px solid var(--border);
+  background: var(--bg);
   flex-shrink: 0;
+  /* belt-and-braces: as the last flex child of an overflow:hidden shell the
+     footer already stays put, but position:sticky keeps it pinned even if
+     that shell's structure changes (e.g. embedded in another scroll container) */
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
 }
 
 .composer textarea {
   flex: 1;
+  min-width: 0;
   resize: none;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -497,9 +536,18 @@ word-break: break-word;
   border-radius: 14px;
   padding: 12px 14px;
   font-family: var(--font-body);
-  font-size: 14.5px;
+  /* 16px is the magic number below which iOS Safari auto-zooms the page
+     on focus; keeping it at/above that avoids the jarring zoom-in on send */
+  font-size: 16px;
+  line-height: 1.4;
   max-height: 140px;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+@media (min-width: 640px) {
+  .composer textarea {
+    font-size: 14.5px;
+  }
 }
 
 .composer textarea:focus {
@@ -513,6 +561,8 @@ word-break: break-word;
 }
 
 .send-btn {
+  flex-shrink: 0;
+  min-height: 44px; /* comfortable tap target on touch devices */
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
   color: #241705;
   border: none;
@@ -537,12 +587,59 @@ word-break: break-word;
   box-shadow: none;
 }
 
+/* ---------- responsive breakpoints ---------- */
+
+@media (max-width: 640px) {
+  .header {
+    padding: 12px 16px;
+    padding-top: max(12px, env(safe-area-inset-top));
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+  .chat {
+    padding: 18px 16px;
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+  .composer {
+    padding: 12px 16px 16px;
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+  .dynamic-chart-wrapper {
+    min-width: 0 !important;
+    padding: 12px 8px 8px !important;
+  }
+}
+
 @media (max-width: 480px) {
   .app {
     border: none;
   }
   .bubble {
     max-width: 88%;
+  }
+  .badge {
+    display: none; /* model badge is a nice-to-have; drop it before it wraps the header on tiny phones */
+  }
+}
+
+@media (max-width: 360px) {
+  .brand-name {
+    font-size: 13px;
+  }
+  .empty-title {
+    font-size: 18px;
+  }
+}
+
+/* Comfortable widescreen ceiling: the 760px column already caps the app,
+   this just keeps the surrounding page from feeling like dead space on
+   ultra-wide monitors by softening the outer background. */
+@media (min-width: 1400px) {
+  body {
+    background: var(--bg);
   }
 }
 /* Ensure the markdown content block handles horizontal constraints neatly */

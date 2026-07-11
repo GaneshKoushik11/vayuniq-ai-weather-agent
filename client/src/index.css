@@ -29,10 +29,20 @@ html,
 body,
 #root {
   height: 100%;
+  /* dvh reflects the real visible viewport on mobile browsers (accounts
+     for collapsing URL bars / on-screen keyboards); 100% above is the
+     fallback for browsers without dvh support. */
+  height: 100dvh;
+}
+
+html {
+  -webkit-text-size-adjust: 100%; /* stop iOS auto-bumping font size in landscape */
 }
 
 body {
   margin: 0;
+  overflow: hidden; /* App.tsx owns internal scrolling; keep the page itself static */
+  overscroll-behavior-y: none; /* no rubber-band bounce revealing blank space behind the app shell */
   background: var(--color-bg);
   color: var(--color-text-main);
   font-family: var(--font-body);
