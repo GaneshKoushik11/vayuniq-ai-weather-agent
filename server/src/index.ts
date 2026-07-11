@@ -58,16 +58,8 @@ interface WeatherResult {
     local_time: string;
 }
 
-interface WordStatsResult {
-    words: number;
-    characters: number;
-    sentences: number;
-}
-
 type Emit = (event: string, data: unknown) => void;
 
-// Minimal shape of an in-progress streamed tool call as it's assembled
-// across delta chunks.
 interface AccumulatingToolCall {
     id: string;
     name: string;
@@ -80,7 +72,7 @@ interface AccumulatingToolCall {
 
 const PORT = Number(process.env.PORT) || 8787;
 const MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
-const MAX_STEPS = 10; // safety cap on tool-call loops
+const MAX_STEPS = 10;
 
 if (!process.env.GROQ_API_KEY) {
     console.warn("\n⚠️  GROQ_API_KEY is not set. Copy server/.env.example to server/.env and add your key.\n");
@@ -93,8 +85,7 @@ app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
 // ---------------------------------------------------------------------------
-// Tools the agent is allowed to call. Each has a JSON-schema description
-// (sent to the model) and a matching implementation (run locally).
+// Tools
 // ---------------------------------------------------------------------------
 
 const TOOL_DEFINITIONS = [
@@ -115,59 +106,16 @@ const TOOL_DEFINITIONS = [
             },
         },
     },
-    {
-        type: "function",
-        function: {
-            name: "get_current_time",
-            description: "Get the current date and time on the server, in ISO format and UTC.",
-            parameters: {
-                type: "object",
-                properties: {},
-            },
-        },
-    },
-    {
-        type: "function",
-        function: {
-            name: "word_stats",
-            description:"Count words, characters, and sentences in a piece of text. Use this instead of counting manually.",
-            parameters: {
-                type: "object",
-                properties: {
-                    text: { type: "string", description: "The text to analyze" },
-                },
-                required: ["text"],
-            },
-        },
-    },
 ] as const;
 
-// WMO weather codes -> plain-language conditions (used by Open-Meteo).
 const WEATHER_CODES: Record<number, string> = {
-    0: "clear sky",
-    1: "mostly clear",
-    2: "partly cloudy",
-    3: "overcast",
-    45: "fog",
-    48: "depositing rime fog",
-    51: "light drizzle",
-    53: "moderate drizzle",
-    55: "dense drizzle",
-    61: "light rain",
-    63: "moderate rain",
-    65: "heavy rain",
-    71: "light snow",
-    73: "moderate snow",
-    75: "heavy snow",
-    77: "snow grains",
-    80: "light rain showers",
-    81: "moderate rain showers",
-    82: "violent rain showers",
-    85: "light snow showers",
-    86: "heavy snow showers",
-    95: "thunderstorm",
-    96: "thunderstorm with light hail",
-    99: "thunderstorm with heavy hail",
+    0: "clear sky", 1: "mostly clear", 2: "partly cloudy", 3: "overcast",
+    45: "fog", 48: "depositing rime fog", 51: "light drizzle", 53: "moderate drizzle",
+    55: "dense drizzle", 61: "light rain", 63: "moderate rain", 65: "heavy rain",
+    71: "light snow", 73: "moderate snow", 75: "heavy snow", 77: "snow grains",
+    80: "light rain showers", 81: "moderate rain showers", 82: "violent rain showers",
+    85: "light snow showers", 86: "heavy snow showers", 95: "thunderstorm",
+    96: "thunderstorm with light hail", 99: "thunderstorm with heavy hail",
 };
 
 async function getWeather(location: string): Promise<WeatherResult> {
@@ -175,7 +123,6 @@ async function getWeather(location: string): Promise<WeatherResult> {
         throw new Error("A location is required.");
     }
 
-    // 1. Turn the place name into coordinates (free, no API key).
     const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=1&language=en&format=json`;
     const geoRes = await fetch(geoUrl);
     if (!geoRes.ok) throw new Error("Location lookup failed.");
@@ -191,7 +138,6 @@ async function getWeather(location: string): Promise<WeatherResult> {
     const place = geo.results?.[0];
     if (!place) throw new Error(`Couldn't find a place called "${location}".`);
 
-    // 2. Fetch current conditions for those coordinates.
     const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${place.latitude}&longitude=${place.longitude}` + `&current=temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m,weather_code` + `&timezone=auto`;
     const weatherRes = await fetch(weatherUrl);
     if (!weatherRes.ok) throw new Error("Weather lookup failed.");
@@ -219,22 +165,10 @@ async function getWeather(location: string): Promise<WeatherResult> {
     };
 }
 
-function wordStats(text: string): WordStatsResult {
-    const trimmed = (text || "").trim();
-    const words = trimmed.length ? trimmed.split(/\s+/).length : 0;
-    const characters = text.length;
-    const sentences = (trimmed.match(/[.!?]+(\s|$)/g) || []).length || (trimmed ? 1 : 0);
-    return { words, characters, sentences };
-}
-
 async function executeTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     switch (name) {
         case "get_weather":
             return await getWeather(args.location as string);
-        case "get_current_time":
-            return { iso: new Date().toISOString(), utc: new Date().toUTCString() };
-        case "word_stats":
-            return wordStats(args.text as string);
         default:
             throw new Error(`Unknown tool: ${name}`);
     }
@@ -248,7 +182,7 @@ function parseToolArgs(raw: string | undefined): Record<string, unknown> {
     }
 }
 
-async function callTool(name: string,argsRaw: string | undefined): Promise<{ callStep: ToolCallStep; resultStep: ToolResultStep | ToolErrorStep; result: unknown }> {
+async function callTool(name: string, argsRaw: string | undefined): Promise<{ callStep: ToolCallStep; resultStep: ToolResultStep | ToolErrorStep; result: unknown }> {
     const args = parseToolArgs(argsRaw);
     const callStep: ToolCallStep = { type: "tool_call", name, args };
 
@@ -265,19 +199,56 @@ async function callTool(name: string,argsRaw: string | undefined): Promise<{ cal
 }
 
 // ---------------------------------------------------------------------------
-// Agent loop: call the model, and if it asks for tools, run them and feed
-// the results back in, repeating until it produces a final answer.
+// Updated Dynamic System Prompt for Dynamic Tables & Data Charts
 // ---------------------------------------------------------------------------
 
-const SYSTEM_PROMPT = `You are Vayuniq, a concise, capable assistant with access to tools.
-- Use a tool whenever it would make your answer more accurate (live weather, current time, text stats).
-- Think step by step, but only show your final, direct answer to the user — do not narrate your reasoning process.
-- If a tool result is surprising, double-check by reasoning about whether it makes sense before answering.
-- Keep answers short and to the point unless the user asks for detail.`;
+const SYSTEM_PROMPT = `You are Vayuniq, a rich weather assistant. You ONLY help with weather-related questions (current conditions, forecasts, comparisons, metrics).
+- Use the get_weather tool whenever it makes your answer more accurate.
+- If the user asks anything that is not about weather, politely decline.
+- Think step by step, but only show your final answer to the user — do not narrate your reasoning process.
+
+FORMATTING OUTPUT RULES:
+1. TABLES: Whenever comparing locations, displaying timelines, or breakdown weather states, use Markdown Tables.
+2. CHARTS: When asked to chart data, map out structural metric lines, or show comparative graphics, append a JSON chart code block at the absolute end of your response inside this token wrapper syntax exactly:
+[CHART_DATA]
+[
+  {"name": "Location/Day A", "temperature": 22, "humidity": 60, "wind": 15},
+  {"name": "Location/Day B", "temperature": 18, "humidity": 75, "wind": 25}
+]
+[/CHART_DATA]
+Ensure the keys inside the JSON list align to: "name", "temperature", "humidity", or "wind". Keep conversational summary text brief outside the token block.`;
+
+const OFF_TOPIC_REPLY = "I can only help with weather questions — try asking about the current conditions or forecast for a place.";
+
+const WEATHER_KEYWORDS = [
+    "weather", "temperature", "temp", "forecast", "rain", "rainy", "snow", "snowy",
+    "wind", "windy", "humidity", "humid", "sunny", "sun", "cloud", "cloudy", "storm",
+    "thunderstorm", "hail", "fog", "foggy", "climate", "hot", "cold", "warm", "cool",
+    "degrees", "celsius", "fahrenheit", "umbrella", "jacket", "drizzle", "overcast",
+    "clear sky", "feels like", "chart", "graph", "plot"
+];
+
+function isWeatherRelated(text: string): boolean {
+    const lower = text.toLowerCase();
+    return WEATHER_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
+function latestUserMessage(conversation: ChatMessage[]): string {
+    for (let i = conversation.length - 1; i >= 0; i--) {
+        if (conversation[i].role === "user" && typeof conversation[i].content === "string") {
+            return conversation[i].content as string;
+        }
+    }
+    return "";
+}
 
 const STEP_LIMIT_MESSAGE = "I wasn't able to finish reasoning about that within my step limit — try breaking the question down.";
 
 async function runAgent(conversation: ChatMessage[]): Promise<AgentResult> {
+    if (!isWeatherRelated(latestUserMessage(conversation))) {
+        return { reply: OFF_TOPIC_REPLY, trace: [], model: MODEL };
+    }
+
     const messages: ChatMessage[] = [{ role: "system", content: SYSTEM_PROMPT }, ...conversation];
     const trace: TraceStep[] = [];
 
@@ -308,17 +279,13 @@ async function runAgent(conversation: ChatMessage[]): Promise<AgentResult> {
     return { reply: STEP_LIMIT_MESSAGE, trace, model: MODEL };
 }
 
-// ---------------------------------------------------------------------------
-// Streaming version of the same loop. Emits three kinds of events via
-// `emit(event, data)`:
-//   - "token": a chunk of the model's answer text, as it's generated
-//   - "trace": a tool_call / tool_result / tool_error step, live
-//   - "done":  the final reply + full trace
-// This is what makes the agent feel real-time: the browser doesn't wait for
-// the whole answer, and it sees each tool call the moment it happens.
-// ---------------------------------------------------------------------------
-
 async function runAgentStream(conversation: ChatMessage[], emit: Emit): Promise<void> {
+    if (!isWeatherRelated(latestUserMessage(conversation))) {
+        emit("token", { content: OFF_TOPIC_REPLY });
+        emit("done", { reply: OFF_TOPIC_REPLY, trace: [], model: MODEL });
+        return;
+    }
+
     const messages: ChatMessage[] = [{ role: "system", content: SYSTEM_PROMPT }, ...conversation];
     const trace: TraceStep[] = [];
 
@@ -387,7 +354,7 @@ async function runAgentStream(conversation: ChatMessage[], emit: Emit): Promise<
 }
 
 // ---------------------------------------------------------------------------
-// Routes
+// Express Routes Setup
 // ---------------------------------------------------------------------------
 
 function isValidMessages(body: unknown): body is { messages: ChatMessage[] } {
@@ -418,9 +385,6 @@ app.post("/api/chat", async (req: Request, res: Response) => {
     }
 });
 
-// Real-time streaming endpoint: Server-Sent Events over a POST request.
-// The browser reads the response body as a stream instead of polling, so
-// tokens and tool-call events show up the instant the server produces them.
 app.post("/api/chat/stream", async (req: Request, res: Response) => {
     if (!isValidMessages(req.body)) {
         return res.status(400).json({ error: "Request body must include a non-empty 'messages' array." });
@@ -430,7 +394,7 @@ app.post("/api/chat/stream", async (req: Request, res: Response) => {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
-        "X-Accel-Buffering": "no", // disable proxy buffering (e.g. nginx) so events flush immediately
+        "X-Accel-Buffering": "no",
     });
     res.flushHeaders?.();
 
@@ -443,7 +407,6 @@ app.post("/api/chat/stream", async (req: Request, res: Response) => {
         }
     };
 
-    // Keep the connection alive through slow tool calls / proxies.
     const heartbeat = setInterval(() => res.write(": ping\n\n"), 15000);
 
     try {
@@ -459,5 +422,5 @@ app.post("/api/chat/stream", async (req: Request, res: Response) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`Simple Agent server running at http://localhost:${PORT}`);
+    console.log(`Vayuniq Weather Agent server running at http://localhost:${PORT}`);
 });

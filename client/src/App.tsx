@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import axios, { type AxiosProgressEvent } from "axios";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid } from "recharts";
 import "./App.css";
 
 // ---------------------------------------------------------------------------
@@ -70,8 +73,8 @@ interface ErrorEvent {
 
 const EXAMPLE_PROMPTS: { text: string; icon: string }[] = [
     { text: "What's the weather in Bengaluru right now?", icon: "☀️" },
-    { text: "Compare the weather in Tokyo and Reykjavik today.", icon: "🌍" },
-    { text: "How many words are in the sentence: 'Relay reasons, then it acts.'?", icon: "🔤" },
+    { text: "Compare the weather in Tokyo and Reykjavik today in a table.", icon: "🌍" },
+    { text: "Create a data chart comparing the temperature between Paris and Miami.", icon: "📊" },
 ];
 
 const TOOL_LABEL: Record<string, string> = {
@@ -80,7 +83,6 @@ const TOOL_LABEL: Record<string, string> = {
     word_stats: "text analyzer",
 };
 
-/** Maps a weather condition string to a color + icon so the UI can react to it. */
 interface WeatherTheme {
     color: string;
     icon: string;
@@ -105,7 +107,6 @@ const WEATHER_THEME: Record<string, WeatherTheme> = {
 
 const DEFAULT_WEATHER_THEME: WeatherTheme = { color: "#38BDF8", icon: "🌤️" };
 
-/** Resolves a raw condition string (e.g. "light rain") to a theme by keyword match. */
 function resolveWeatherTheme(condition?: string): WeatherTheme {
     if (!condition) return DEFAULT_WEATHER_THEME;
     const key = condition.toLowerCase();
@@ -113,7 +114,6 @@ function resolveWeatherTheme(condition?: string): WeatherTheme {
     return match ? WEATHER_THEME[match] : DEFAULT_WEATHER_THEME;
 }
 
-/** Pulls a weather theme out of a get_weather tool_result, if present in the trace. */
 function weatherThemeFromTrace(trace?: TraceStep[]): WeatherTheme | null {
     if (!trace) return null;
     for (let i = trace.length - 1; i >= 0; i--) {
@@ -127,15 +127,12 @@ function weatherThemeFromTrace(trace?: TraceStep[]): WeatherTheme | null {
     return null;
 }
 
-// XHR adapter is required (not the fetch adapter) so onDownloadProgress can
-// read the partial response body via xhr.responseText while streaming.
 const api = axios.create({ baseURL: import.meta.env.VITE_API_URL ?? "/api", adapter: "xhr" });
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Parses one SSE "event: X\ndata: Y\n\n" block into { event, data }. */
 function parseSSEBlock(block: string): SSEBlock {
     let event = "message";
     let data = "";
@@ -146,7 +143,6 @@ function parseSSEBlock(block: string): SSEBlock {
     return { event, data };
 }
 
-/** Applies one parsed SSE event to an assistant message, returning the updated message. */
 function applySSEEvent(message: ChatMessage, event: string, parsed: TokenEvent | TraceStep | DoneEvent | ErrorEvent): ChatMessage {
     switch (event) {
         case "token":
@@ -154,19 +150,9 @@ function applySSEEvent(message: ChatMessage, event: string, parsed: TokenEvent |
         case "trace": {
             const incoming = parsed as TraceStep;
             const trace = message.trace ?? [];
-
-            const exists = trace.some(
-                (t) => JSON.stringify(t) === JSON.stringify(incoming)
-            );
-
-            if (exists) {
-                return message;
-            }
-
-            return {
-                ...message,
-                trace: [...trace, incoming],
-            };
+            const exists = trace.some((t) => JSON.stringify(t) === JSON.stringify(incoming));
+            if (exists) return message;
+            return { ...message, trace: [...trace, incoming] };
         }
         case "done": {
             const done = parsed as DoneEvent;
@@ -180,16 +166,70 @@ function applySSEEvent(message: ChatMessage, event: string, parsed: TokenEvent |
 }
 
 // ---------------------------------------------------------------------------
+// Dynamic Chart Pipeline Component
+// ---------------------------------------------------------------------------
+function MessageContentRenderer({ text }: { text: string }) {
+    const chartStartTag = "[CHART_DATA]";
+    const chartEndTag = "[/CHART_DATA]";
+
+    if (!text.includes(chartStartTag)) {
+        return <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>;
+    }
+
+    const parts = text.split(chartStartTag);
+    const cleanMarkdownText = parts[0];
+    const residualString = parts[1] || "";
+    const contentSplit = residualString.split(chartEndTag);
+    const rawJsonPayload = contentSplit[0]?.trim();
+    const tailingMarkdownText = contentSplit[1] || "";
+
+    let chartDataArray: any[] = [];
+    let parseSuccess = false;
+
+    try {
+        if (rawJsonPayload) {
+            chartDataArray = JSON.parse(rawJsonPayload);
+            parseSuccess = Array.isArray(chartDataArray);
+        }
+    } catch (e) {
+        parseSuccess = false;
+    }
+
+    return (
+        <div>
+            {cleanMarkdownText && <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanMarkdownText}</ReactMarkdown>}
+            
+            {parseSuccess && chartDataArray.length > 0 && (
+                <div className="dynamic-chart-wrapper" style={{ width: "100%", height: 260, marginTop: "12px", marginBottom: "12px", background: "rgba(255,255,255,0.06)", padding: "12px", borderRadius: "8px" }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={chartDataArray} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+                            <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} tickLine={false} />
+                            <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} />
+                            <Tooltip contentStyle={{ background: "#1e293b", borderColor: "#334155", borderRadius: "6px", color: "#f8fafc" }} />
+                            <Legend wrapperStyle={{ fontSize: 11, marginTop: 4 }} />
+                            {chartDataArray[0]?.temperature !== undefined && <Bar dataKey="temperature" name="Temp (°C)" fill="#f5a623" radius={[4, 4, 0, 0]} />}
+                            {chartDataArray[0]?.humidity !== undefined && <Bar dataKey="humidity" name="Humidity (%)" fill="#38bdf8" radius={[4, 4, 0, 0]} />}
+                            {chartDataArray[0]?.wind !== undefined && <Bar dataKey="wind" name="Wind (kph)" fill="#5eead4" radius={[4, 4, 0, 0]} />}
+                        </BarChart>
+                    </ResponsiveContainer>
+                </div>
+            )}
+
+            {tailingMarkdownText && <ReactMarkdown remarkPlugins={[remarkGfm]}>{tailingMarkdownText}</ReactMarkdown>}
+        </div>
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Trace strip
 // ---------------------------------------------------------------------------
 
-/** A tool_call paired with its (possibly not-yet-arrived) outcome. */
 interface TraceGroup {
     call: ToolCallStep;
     outcome?: ToolResultStep | ToolErrorStep;
 }
 
-/** Groups a flat trace array into call+outcome pairs, in call order. */
 function groupTrace(trace: TraceStep[]): TraceGroup[] {
     const groups: TraceGroup[] = [];
     for (const step of trace) {
@@ -210,14 +250,13 @@ const TOOL_ICON: Record<string, string> = {
     word_stats: "🔤",
 };
 
-/** Turns a raw tool result into a short, human-readable summary. */
 function summarizeResult(name: string, result: unknown): string {
     if (result && typeof result === "object") {
         const r = result as Record<string, unknown>;
         if (name === "get_weather") {
             const parts: string[] = [];
             if (typeof r.location === "string") parts.push(r.location);
-            if (typeof r.temperature === "number") parts.push(`${r.temperature}°C`);
+            if (typeof r.temperature_c === "number") parts.push(`${r.temperature_c}°C`);
             if (typeof r.condition === "string") parts.push(String(r.condition));
             if (parts.length) return parts.join(" — ");
         }
@@ -316,7 +355,7 @@ function TraceStrip({ trace }: { trace?: TraceStep[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// App
+// Main App
 // ---------------------------------------------------------------------------
 
 export default function App() {
@@ -343,9 +382,6 @@ export default function App() {
         listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
     }, [messages, loading]);
 
-    // Refs mirror the latest state so `send` can read current values without
-    // needing `messages`/`loading` in its dependency array — keeping it (and
-    // anything that depends on it, like onKeyDown) referentially stable.
     const messagesRef = useRef<ChatMessage[]>(messages);
     const loadingRef = useRef(loading);
 
@@ -358,76 +394,71 @@ export default function App() {
     }, [loading]);
 
     const send = useCallback(async (text: string) => {
-            const trimmed = text.trim();
-            if (!trimmed || loadingRef.current) return;
+        const trimmed = text.trim();
+        if (!trimmed || loadingRef.current) return;
 
-            const userMsg: ChatMessage = { id: crypto.randomUUID(), role: "user", content: trimmed };
-            const nextMessages = [...messagesRef.current, userMsg];
-            const assistantId = crypto.randomUUID();
+        const userMsg: ChatMessage = { id: crypto.randomUUID(), role: "user", content: trimmed };
+        const nextMessages = [...messagesRef.current, userMsg];
+        const assistantId = crypto.randomUUID();
 
-            setMessages([...nextMessages,{ id: assistantId, role: "assistant", content: "", trace: [], streaming: true }]);
-            setInput("");
-            setLoading(true);
+        setMessages([...nextMessages, { id: assistantId, role: "assistant", content: "", trace: [], streaming: true }]);
+        setInput("");
+        setLoading(true);
 
-            const patch = (fn: (m: ChatMessage) => ChatMessage) =>
+        const patch = (fn: (m: ChatMessage) => ChatMessage) =>
             setMessages((prev) => prev.map((m) => (m.id === assistantId ? fn(m) : m)));
 
-            // axios hands onDownloadProgress the *entire* buffer received so far,
-            // so we track how much of it we've already parsed into SSE blocks.
-            let processedLength = 0;
-            let pending = "";
+        let processedLength = 0;
+        let pending = "";
 
-            const handleChunk = (progressEvent: AxiosProgressEvent) => {
-                const xhr = progressEvent.event?.target as XMLHttpRequest;
-                const full = xhr.responseText;
+        const handleChunk = (progressEvent: AxiosProgressEvent) => {
+            const xhr = progressEvent.event?.target as XMLHttpRequest;
+            const full = xhr.responseText;
 
-                const chunk = full.slice(processedLength);
-                processedLength = full.length;
+            const chunk = full.slice(processedLength);
+            processedLength = full.length;
 
-                pending += chunk;
+            pending += chunk;
 
-                const blocks = pending.split("\n\n");
+            const blocks = pending.split("\n\n");
+            pending = blocks.pop() ?? "";
 
-                // keep incomplete block
-                pending = blocks.pop() ?? "";
+            for (const block of blocks) {
+                if (!block.trim() || block.startsWith(":")) continue;
 
-                for (const block of blocks) {
-                    if (!block.trim() || block.startsWith(":")) continue;
+                const { event, data } = parseSSEBlock(block);
+                if (!data) continue;
 
-                    const { event, data } = parseSSEBlock(block);
-
-                    if (!data) continue;
-
-                    try {
-                        patch((m) => applySSEEvent(m, event, JSON.parse(data)));
-                    } catch {
-                        // ignore malformed partial json
-                    }
+                try {
+                    patch((m) => applySSEEvent(m, event, JSON.parse(data)));
+                } catch {
+                    // Fail safely during real-time token processing
                 }
-            };
-
-            try {
-                await api.post("/chat/stream",{ messages: nextMessages.map(({ role, content }) => ({ role, content })) },
-                    {
-                        responseType: "text",
-                        headers: { "Content-Type": "application/json" },
-                        onDownloadProgress: handleChunk,
-                    }
-                );
-            } catch (err) {
-                const message = axios.isAxiosError(err) ? err.response?.data?.error ?? err.message : err instanceof Error ? err.message : "Something went wrong";
-                patch((m) => ({ ...m, content: message, error: true, streaming: false }));
-            } finally {
-                setLoading(false);
             }
-    }, []); // stable — reads current state via refs above
+        };
+
+        try {
+            await api.post("/chat/stream", { messages: nextMessages.map(({ role, content }) => ({ role, content })) },
+                {
+                    responseType: "text",
+                    headers: { "Content-Type": "application/json" },
+                    onDownloadProgress: handleChunk,
+                }
+            );
+        } catch (err) {
+            const message = axios.isAxiosError(err) ? err.response?.data?.error ?? err.message : err instanceof Error ? err.message : "Something went wrong";
+            patch((m) => ({ ...m, content: message, error: true, streaming: false }));
+        } finally {
+            setLoading(false);
+        }
+    }, []);
 
     const onKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
         if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             send(input);
         }
-    },[input, send]);
+    }, [input, send]);
 
     return (
         <div className="app">
@@ -474,7 +505,10 @@ export default function App() {
                                         <span className="typing-dot" />
                                     </span>
                                 ) : (
-                                    <p>{m.content}{m.streaming && <span className="cursor" />}</p>
+                                    <div className="markdown-content">
+                                        <MessageContentRenderer text={m.content} />
+                                        {m.streaming && <span className="cursor" />}
+                                    </div>
                                 )}
                             </div>
                         </div>
@@ -483,7 +517,7 @@ export default function App() {
             </main>
 
             <footer className="composer">
-                <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={onKeyDown} placeholder="Message Vayuniq… (Enter to send, Shift+Enter for a new line)" rows={1}/>
+                <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={onKeyDown} placeholder="Message Vayuniq… (Enter to send, Shift+Enter for a new line)" rows={1} />
                 <button className="send-btn" onClick={() => send(input)} disabled={loading || !input.trim()}>Send</button>
             </footer>
         </div>

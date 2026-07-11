@@ -1,22 +1,26 @@
-:root {
-  --bg: #12151b;
-  --panel: #191d25;
-  --panel-2: #20262f;
-  --border: #2a323d;
-  --text: #e7eaf0;
-  --text-dim: #8f99a8;
-  --accent: #f2a93b;
-  --accent-soft: rgba(242, 169, 59, 0.14);
-  --teal: #3fa796;
-  --teal-soft: rgba(63, 167, 150, 0.14);
-  --danger: #e5645d;
-  --danger-soft: rgba(229, 100, 93, 0.14);
+@import "tailwindcss";
+
+/* 1. Register your variables with Tailwind v4 so utility classes exist */
+@theme {
+  --color-bg: #12151b;
+  --color-panel: #191d25;
+  --color-panel-2: #20262f;
+  --color-border-custom: #2a323d; /* Renamed slightly to avoid overriding default Tailwind borders */
+  --color-text-main: #e7eaf0;
+  --color-text-dim: #8f99a8;
+  --color-accent: #f2a93b;
+  --color-accent-soft: rgba(242, 169, 59, 0.14);
+  --color-teal: #3fa796;
+  --color-teal-soft: rgba(63, 167, 150, 0.14);
+  --color-danger: #e5645d;
+  --color-danger-soft: rgba(229, 100, 93, 0.14);
 
   --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
   --font-body: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
 }
 
+/* 2. Set your global native HTML styles using your variables */
 * {
   box-sizing: border-box;
 }
@@ -29,8 +33,8 @@ body,
 
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--text);
+  background: var(--color-bg);
+  color: var(--color-text-main);
   font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
 }
@@ -43,11 +47,11 @@ textarea {
 }
 
 ::selection {
-  background: var(--accent-soft);
+  background: var(--color-accent-soft);
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
 
