@@ -71,7 +71,7 @@ interface AccumulatingToolCall {
 // ---------------------------------------------------------------------------
 
 const PORT = Number(process.env.PORT) || 8787;
-const MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+const MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
 const MAX_STEPS = 10;
 
 if (!process.env.GROQ_API_KEY) {
