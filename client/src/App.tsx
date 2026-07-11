@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import axios, { type AxiosProgressEvent } from "axios";
+import { Analytics } from '@vercel/analytics/react';
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid } from "recharts";
@@ -596,6 +597,8 @@ export default function App() {
                 </div>
                 <p className="composer-hint">Enter to send · Shift + Enter for a new line</p>
             </footer>
+            {/* Renders the tracking script seamlessly */}
+            <Analytics />
         </div>
     );
 }
