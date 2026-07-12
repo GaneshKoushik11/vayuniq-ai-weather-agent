@@ -1,5 +1,7 @@
 # 🌤️ AI-Powered Weather Agent
 
+# Live Demo - https://vayuniq-ai-weather-agent-kappa.vercel.app/
+
 An intelligent, conversational weather assistant built using a modern full-stack architecture. By combining the speed of **Groq** with LLM **tool calling**, this agent moves beyond static chat responses to autonomously fetch real-time meteorological data and interpret it contextually for the user.
 
 ### 🛠️ Key Features
