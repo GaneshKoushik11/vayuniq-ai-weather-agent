@@ -193,25 +193,49 @@ async function geocode(location: string): Promise<{ name: string; admin1?: strin
     return place;
 }
 
-// Best-effort label for a set of coordinates. If this fails, we still have
-// exact coordinates — we just fall back to labeling it generically rather
-// than failing the whole request over a display-name nicety.
+function formatCoordsLabel(lat: number, lon: number): string {
+    const ns = lat >= 0 ? "N" : "S";
+    const ew = lon >= 0 ? "E" : "W";
+    return `${Math.abs(lat).toFixed(2)}°${ns}, ${Math.abs(lon).toFixed(2)}°${ew}`;
+}
+
+async function reverseGeocodeViaBigDataCloud(lat: number, lon: number): Promise<string | null> {
+    const res = await fetch(
+        `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`
+    );
+    if (!res.ok) return null;
+    const data = await res.json() as { city?: string; locality?: string; principalSubdivision?: string; countryName?: string };
+    const label = [data.city || data.locality, data.principalSubdivision, data.countryName].filter(Boolean).join(", ");
+    return label || null;
+}
+
+async function reverseGeocodeViaNominatim(lat: number, lon: number): Promise<string | null> {
+    const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`,
+        { headers: { "User-Agent": "VayuniqWeatherAgent/1.0 (weather lookup)" } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json() as { address?: Record<string, string> };
+    const addr = data.address || {};
+    const label = [addr.city || addr.town || addr.village || addr.county, addr.state, addr.country].filter(Boolean).join(", ");
+    return label || null;
+}
+
+// Best-effort label for a set of coordinates. Tries a couple of free
+// reverse-geocoding providers (in case one is rate-limited or blocked for
+// this server's IP), and if all of them fail, falls back to the actual
+// coordinates rather than a vague placeholder — so the reply always names
+// something specific instead of silently saying "your location".
 async function reverseGeocodeLabel(lat: number, lon: number): Promise<string> {
-    try {
-        const res = await fetch(
-            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`,
-            { headers: { "User-Agent": "VayuniqWeatherAgent/1.0" } }
-        );
-        if (!res.ok) throw new Error("reverse geocode failed");
-        const data = await res.json() as { address?: Record<string, string> };
-        const addr = data.address || {};
-        const label = [addr.city || addr.town || addr.village || addr.county, addr.state, addr.country]
-            .filter(Boolean)
-            .join(", ");
-        return label || "Your current location";
-    } catch {
-        return "Your current location";
+    for (const provider of [reverseGeocodeViaBigDataCloud, reverseGeocodeViaNominatim]) {
+        try {
+            const label = await provider(lat, lon);
+            if (label) return label;
+        } catch {
+            // try the next provider
+        }
     }
+    return formatCoordsLabel(lat, lon);
 }
 
 function requireLocation(location: RequestLocation | undefined): RequestLocation {
@@ -444,6 +468,8 @@ const SYSTEM_PROMPT = `You are Vayuniq, a rich weather assistant. You ONLY help 
 - If the tool returns fewer days than requested (see its "note" field), that's because weather models lose reliable accuracy beyond a certain horizon — a physical limit of forecasting, not a limitation of this app. Explain that plainly, share the outlook you do have, and offer typical/seasonal conditions as a substitute for anything further out. Never just say "I can't predict future weather" with no explanation.
 - If the user asks about their own current location ("here", "my location", "near me", "where I am"), call get_weather or get_forecast with use_current_location=true and no "location" argument. NEVER invent, assume, or default to any specific city (not New York, not anywhere) for a "current location" request — you have no way to know where someone is unless the tool tells you.
 - If the current-location tool call fails because no location was shared, tell the user plainly that their location hasn't been shared yet (e.g. the browser didn't grant permission) and ask them to allow location access or just name the city — never substitute a guessed city instead.
+- CRITICAL: after any successful tool call, your reply MUST report the actual values the tool returned — the real temperature, condition, humidity, wind, or forecast values — in plain sentences. A reply that only comments on the mechanics of the call itself (e.g. "the function call was successful", "it seems your location has been shared", "I was able to retrieve the data") without stating what that data actually is is USELESS and NEVER acceptable, even if it's your one and only reply. "Don't narrate your reasoning process" means don't describe your internal steps or which tool you're about to use — it does NOT mean withholding the tool's actual results from the user.
+- Every tool result includes a "location" field with the actual resolved place name (e.g. "Bengaluru, Karnataka, India"). ALWAYS name that place explicitly in your reply — say "The weather in Bengaluru is..." not "The weather at your location is...". This matters most for current-location requests: the "location" field is the only way the user finds out where the data is even for, so silently saying "your location" instead of naming it defeats the purpose of asking.
 - If the user asks anything that is not about weather, politely decline.
 - Think step by step, but only show your final answer to the user — do not narrate your reasoning process.
 
