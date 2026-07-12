@@ -441,6 +441,27 @@ export default function App() {
     const loadingRef = useRef(loading);
     const abortRef = useRef<AbortController | null>(null);
 
+    // Best-effort device location. Requested once in the background on load
+    // (not blocking send) so the model can answer "weather near me"-type
+    // questions honestly instead of guessing a city. If permission is
+    // denied or unavailable, this just stays null — the backend already
+    // knows to ask the user for a city rather than fabricate one.
+    interface DeviceCoords { latitude: number; longitude: number }
+    const locationRef = useRef<DeviceCoords | null>(null);
+
+    useEffect(() => {
+        if (!("geolocation" in navigator)) return;
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                locationRef.current = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+            },
+            () => {
+                // Permission denied or unavailable — locationRef stays null.
+            },
+            { enableHighAccuracy: false, timeout: 8000, maximumAge: 5 * 60 * 1000 }
+        );
+    }, []);
+
     useEffect(() => {
         messagesRef.current = messages;
     }, [messages]);
@@ -497,7 +518,11 @@ export default function App() {
         };
 
         try {
-            await api.post("/chat/stream", { messages: nextMessages.map(({ role, content }) => ({ role, content })) },
+            await api.post("/chat/stream",
+                {
+                    messages: nextMessages.map(({ role, content }) => ({ role, content })),
+                    location: locationRef.current ?? undefined,
+                },
                 {
                     responseType: "text",
                     headers: { "Content-Type": "application/json" },

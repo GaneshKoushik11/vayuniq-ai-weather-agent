@@ -75,6 +75,13 @@ interface ForecastResult {
     forecast: ForecastDay[];
 }
 
+// Coordinates the client's browser supplied via navigator.geolocation, if
+// the person allowed it. Never guessed or defaulted server-side.
+interface RequestLocation {
+    latitude: number;
+    longitude: number;
+}
+
 type Emit = (event: string, data: unknown) => void;
 
 interface AccumulatingToolCall {
@@ -110,16 +117,23 @@ const TOOL_DEFINITIONS = [
         type: "function",
         function: {
             name: "get_weather",
-            description: "Get the current real-time weather for a city or place name (temperature, conditions, wind, humidity).",
+            description:
+                "Get the current real-time weather for a place (temperature, conditions, wind, humidity). " +
+                "If the user is asking about their own current location ('here', 'my location', 'near me', " +
+                "'where I am'), set use_current_location=true and omit 'location' — never guess or invent a " +
+                "city name for them.",
             parameters: {
                 type: "object",
                 properties: {
                     location: {
                         type: "string",
-                        description: "A city or place name, optionally with country, e.g. 'Bengaluru' or 'Paris, France'",
+                        description: "A city or place name, optionally with country, e.g. 'Bengaluru' or 'Paris, France'. Omit this if use_current_location is true.",
+                    },
+                    use_current_location: {
+                        type: "boolean",
+                        description: "Set true when the user means their own current location rather than a named place.",
                     },
                 },
-                required: ["location"],
             },
         },
     },
@@ -128,17 +142,23 @@ const TOOL_DEFINITIONS = [
         function: {
             name: "get_forecast",
             description:
-                "Get a daily weather forecast for a city or place name (max/min temperature, condition, " +
-                "precipitation chance, wind). Ask for as many days as the user needs, even if that's weeks or " +
-                "a month out — the tool will return as many days as the weather provider can actually forecast " +
-                "and tell you if it had to return fewer than requested, along with why. Don't refuse a request " +
-                "just because it's far in the future; call the tool and let it report its real limits.",
+                "Get a daily weather forecast for a place (max/min temperature, condition, precipitation " +
+                "chance, wind). Ask for as many days as the user needs, even if that's weeks or a month out — " +
+                "the tool will return as many days as the weather provider can actually forecast and tell you " +
+                "if it had to return fewer than requested, along with why. Don't refuse a request just because " +
+                "it's far in the future; call the tool and let it report its real limits. If the user means " +
+                "their own current location ('here', 'my location', 'near me'), set use_current_location=true " +
+                "and omit 'location' — never guess a city name for them.",
             parameters: {
                 type: "object",
                 properties: {
                     location: {
                         type: "string",
-                        description: "A city or place name, optionally with country, e.g. 'Bengaluru' or 'Paris, France'",
+                        description: "A city or place name, optionally with country, e.g. 'Bengaluru' or 'Paris, France'. Omit this if use_current_location is true.",
+                    },
+                    use_current_location: {
+                        type: "boolean",
+                        description: "Set true when the user means their own current location rather than a named place.",
                     },
                     days: {
                         type: "integer",
@@ -146,7 +166,6 @@ const TOOL_DEFINITIONS = [
                         minimum: 1,
                     },
                 },
-                required: ["location"],
             },
         },
     },
@@ -161,6 +180,80 @@ const WEATHER_CODES: Record<number, string> = {
     85: "light snow showers", 86: "heavy snow showers", 95: "thunderstorm",
     96: "thunderstorm with light hail", 99: "thunderstorm with heavy hail",
 };
+
+async function geocode(location: string): Promise<{ name: string; admin1?: string; country?: string; latitude: number; longitude: number }> {
+    const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=1&language=en&format=json`;
+    const geoRes = await fetch(geoUrl);
+    if (!geoRes.ok) throw new Error("Location lookup failed.");
+    const geo = await geoRes.json() as {
+        results?: Array<{ name: string; admin1?: string; country?: string; latitude: number; longitude: number }>;
+    };
+    const place = geo.results?.[0];
+    if (!place) throw new Error(`Couldn't find a place called "${location}".`);
+    return place;
+}
+
+// Best-effort label for a set of coordinates. If this fails, we still have
+// exact coordinates — we just fall back to labeling it generically rather
+// than failing the whole request over a display-name nicety.
+async function reverseGeocodeLabel(lat: number, lon: number): Promise<string> {
+    try {
+        const res = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`,
+            { headers: { "User-Agent": "VayuniqWeatherAgent/1.0" } }
+        );
+        if (!res.ok) throw new Error("reverse geocode failed");
+        const data = await res.json() as { address?: Record<string, string> };
+        const addr = data.address || {};
+        const label = [addr.city || addr.town || addr.village || addr.county, addr.state, addr.country]
+            .filter(Boolean)
+            .join(", ");
+        return label || "Your current location";
+    } catch {
+        return "Your current location";
+    }
+}
+
+function requireLocation(location: RequestLocation | undefined): RequestLocation {
+    if (!location) {
+        throw new Error(
+            "The user's current location hasn't been shared by their browser/device yet, so it can't be looked " +
+            "up. Don't guess or invent a city — ask them to allow location access, or ask which place they mean."
+        );
+    }
+    return location;
+}
+
+async function getWeatherByCoords(location: RequestLocation): Promise<WeatherResult> {
+    const { latitude, longitude } = location;
+    const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}` + `&current=temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m,weather_code` + `&timezone=auto`;
+    const weatherRes = await fetch(weatherUrl);
+    if (!weatherRes.ok) throw new Error("Weather lookup failed.");
+    const weather = await weatherRes.json() as {
+        current?: {
+            temperature_2m: number | null;
+            apparent_temperature: number | null;
+            relative_humidity_2m: number | null;
+            wind_speed_10m: number | null;
+            weather_code: number;
+            time: string;
+        };
+    };
+    const current = weather.current;
+    if (!current) throw new Error("No current weather data available for your location.");
+
+    const label = await reverseGeocodeLabel(latitude, longitude);
+
+    return {
+        location: label,
+        temperature_c: current.temperature_2m,
+        feels_like_c: current.apparent_temperature,
+        humidity_percent: current.relative_humidity_2m,
+        wind_kph: current.wind_speed_10m,
+        condition: WEATHER_CODES[current.weather_code] || "unknown conditions",
+        local_time: current.time,
+    };
+}
 
 async function getWeather(location: string): Promise<WeatherResult> {
     if (!location || typeof location !== "string") {
@@ -253,16 +346,30 @@ async function getDailyForecastClamped(lat: number, lon: number, daysRequested: 
     }
 }
 
-async function geocode(location: string): Promise<{ name: string; admin1?: string; country?: string; latitude: number; longitude: number }> {
-    const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=1&language=en&format=json`;
-    const geoRes = await fetch(geoUrl);
-    if (!geoRes.ok) throw new Error("Location lookup failed.");
-    const geo = await geoRes.json() as {
-        results?: Array<{ name: string; admin1?: string; country?: string; latitude: number; longitude: number }>;
-    };
-    const place = geo.results?.[0];
-    if (!place) throw new Error(`Couldn't find a place called "${location}".`);
-    return place;
+function buildForecastResult(
+    daily: ForecastDaily,
+    daysReturned: number,
+    daysRequested: number,
+    locationLabel: string
+): ForecastResult {
+    const forecast: ForecastDay[] = daily.time.map((date, i) => ({
+        date,
+        condition: WEATHER_CODES[daily.weather_code[i]] || "unknown conditions",
+        temp_max_c: daily.temperature_2m_max?.[i] ?? null,
+        temp_min_c: daily.temperature_2m_min?.[i] ?? null,
+        precipitation_probability_percent: daily.precipitation_probability_max?.[i] ?? null,
+        wind_kph: daily.wind_speed_10m_max?.[i] ?? null,
+    }));
+
+    const note =
+        daysReturned < daysRequested
+            ? `Only ${daysReturned} day(s) of forecast could be retrieved even though ${daysRequested} were requested. ` +
+              `This is because weather models lose reliable day-by-day accuracy beyond a certain horizon — not a ` +
+              `limitation of this app. Mention this plainly to the user, offer the ${daysReturned}-day outlook you ` +
+              `do have, and suggest typical/seasonal conditions if they wanted something further out.`
+            : null;
+
+    return { location: locationLabel, days_returned: daysReturned, days_requested: daysRequested, note, forecast };
 }
 
 async function getForecast(location: string, daysRequested: number): Promise<ForecastResult> {
@@ -273,39 +380,30 @@ async function getForecast(location: string, daysRequested: number): Promise<For
     const requested = Math.max(1, daysRequested || 7);
     const place = await geocode(location);
     const { daily, daysServed } = await getDailyForecastClamped(place.latitude, place.longitude, requested);
+    const label = [place.name, place.admin1, place.country].filter(Boolean).join(", ");
 
-    const forecast: ForecastDay[] = daily.time.map((date, i) => ({
-        date,
-        condition: WEATHER_CODES[daily.weather_code[i]] || "unknown conditions",
-        temp_max_c: daily.temperature_2m_max?.[i] ?? null,
-        temp_min_c: daily.temperature_2m_min?.[i] ?? null,
-        precipitation_probability_percent: daily.precipitation_probability_max?.[i] ?? null,
-        wind_kph: daily.wind_speed_10m_max?.[i] ?? null,
-    }));
-
-    const daysReturned = forecast.length;
-    const note =
-        daysReturned < requested
-            ? `Only ${daysReturned} day(s) of forecast could be retrieved even though ${requested} were requested. ` +
-              `This is because weather models lose reliable day-by-day accuracy beyond a certain horizon — not a ` +
-              `limitation of this app. Mention this plainly to the user, offer the ${daysReturned}-day outlook you ` +
-              `do have, and suggest typical/seasonal conditions if they wanted something further out.`
-            : null;
-
-    return {
-        location: [place.name, place.admin1, place.country].filter(Boolean).join(", "),
-        days_returned: daysReturned,
-        days_requested: requested,
-        note,
-        forecast,
-    };
+    return buildForecastResult(daily, daysServed, requested, label);
 }
 
-async function executeTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+async function getForecastByCoords(location: RequestLocation, daysRequested: number): Promise<ForecastResult> {
+    const requested = Math.max(1, daysRequested || 7);
+    const { daily, daysServed } = await getDailyForecastClamped(location.latitude, location.longitude, requested);
+    const label = await reverseGeocodeLabel(location.latitude, location.longitude);
+
+    return buildForecastResult(daily, daysServed, requested, label);
+}
+
+async function executeTool(name: string, args: Record<string, unknown>, requestLocation: RequestLocation | undefined): Promise<unknown> {
     switch (name) {
         case "get_weather":
+            if (args.use_current_location) {
+                return await getWeatherByCoords(requireLocation(requestLocation));
+            }
             return await getWeather(args.location as string);
         case "get_forecast":
+            if (args.use_current_location) {
+                return await getForecastByCoords(requireLocation(requestLocation), Number(args.days) || 7);
+            }
             return await getForecast(args.location as string, Number(args.days) || 7);
         default:
             throw new Error(`Unknown tool: ${name}`);
@@ -320,12 +418,12 @@ function parseToolArgs(raw: string | undefined): Record<string, unknown> {
     }
 }
 
-async function callTool(name: string, argsRaw: string | undefined): Promise<{ callStep: ToolCallStep; resultStep: ToolResultStep | ToolErrorStep; result: unknown }> {
+async function callTool(name: string, argsRaw: string | undefined, requestLocation: RequestLocation | undefined): Promise<{ callStep: ToolCallStep; resultStep: ToolResultStep | ToolErrorStep; result: unknown }> {
     const args = parseToolArgs(argsRaw);
     const callStep: ToolCallStep = { type: "tool_call", name, args };
 
     try {
-        const result = await executeTool(name, args);
+        const result = await executeTool(name, args, requestLocation);
         const resultStep: ToolResultStep = { type: "tool_result", name, result };
         return { callStep, resultStep, result };
     } catch (err) {
@@ -344,6 +442,8 @@ const SYSTEM_PROMPT = `You are Vayuniq, a rich weather assistant. You ONLY help 
 - Use the get_weather tool for current/real-time conditions.
 - Use the get_forecast tool for anything about upcoming days (tomorrow, this weekend, next week, next month, etc.). Pass however many days out the user is asking about — don't refuse just because it sounds far away; the tool itself will tell you how many days it could actually retrieve and why.
 - If the tool returns fewer days than requested (see its "note" field), that's because weather models lose reliable accuracy beyond a certain horizon — a physical limit of forecasting, not a limitation of this app. Explain that plainly, share the outlook you do have, and offer typical/seasonal conditions as a substitute for anything further out. Never just say "I can't predict future weather" with no explanation.
+- If the user asks about their own current location ("here", "my location", "near me", "where I am"), call get_weather or get_forecast with use_current_location=true and no "location" argument. NEVER invent, assume, or default to any specific city (not New York, not anywhere) for a "current location" request — you have no way to know where someone is unless the tool tells you.
+- If the current-location tool call fails because no location was shared, tell the user plainly that their location hasn't been shared yet (e.g. the browser didn't grant permission) and ask them to allow location access or just name the city — never substitute a guessed city instead.
 - If the user asks anything that is not about weather, politely decline.
 - Think step by step, but only show your final answer to the user — do not narrate your reasoning process.
 
@@ -400,7 +500,7 @@ function isConversationWeatherRelated(conversation: ChatMessage[]): boolean {
 
 const STEP_LIMIT_MESSAGE = "I wasn't able to finish reasoning about that within my step limit — try breaking the question down.";
 
-async function runAgent(conversation: ChatMessage[]): Promise<AgentResult> {
+async function runAgent(conversation: ChatMessage[], location: RequestLocation | undefined): Promise<AgentResult> {
     if (!isConversationWeatherRelated(conversation)) {
         return { reply: OFF_TOPIC_REPLY, trace: [], model: MODEL };
     }
@@ -426,7 +526,7 @@ async function runAgent(conversation: ChatMessage[]): Promise<AgentResult> {
         }
 
         for (const call of toolCalls) {
-            const { callStep, resultStep, result } = await callTool(call.function.name, call.function.arguments);
+            const { callStep, resultStep, result } = await callTool(call.function.name, call.function.arguments, location);
             trace.push(callStep, resultStep);
             messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
         }
@@ -435,7 +535,7 @@ async function runAgent(conversation: ChatMessage[]): Promise<AgentResult> {
     return { reply: STEP_LIMIT_MESSAGE, trace, model: MODEL };
 }
 
-async function runAgentStream(conversation: ChatMessage[], emit: Emit): Promise<void> {
+async function runAgentStream(conversation: ChatMessage[], emit: Emit, location: RequestLocation | undefined): Promise<void> {
     if (!isConversationWeatherRelated(conversation)) {
         emit("token", { content: OFF_TOPIC_REPLY });
         emit("done", { reply: OFF_TOPIC_REPLY, trace: [], model: MODEL });
@@ -496,7 +596,7 @@ async function runAgentStream(conversation: ChatMessage[], emit: Emit): Promise<
         }
 
         for (const tc of toolCalls) {
-            const { callStep, resultStep, result } = await callTool(tc.name, tc.arguments);
+            const { callStep, resultStep, result } = await callTool(tc.name, tc.arguments, location);
             trace.push(callStep);
             emit("trace", callStep);
             trace.push(resultStep);
@@ -522,6 +622,16 @@ function isValidMessages(body: unknown): body is { messages: ChatMessage[] } {
     );
 }
 
+// The client sends this only if the browser's Geolocation API succeeded and
+// the user granted permission. Absent/malformed input is just treated as
+// "no location available" — the model is instructed never to guess instead.
+function extractLocation(body: unknown): RequestLocation | undefined {
+    const raw = (body as { location?: unknown } | null)?.location as { latitude?: unknown; longitude?: unknown } | undefined;
+    if (!raw || typeof raw.latitude !== "number" || typeof raw.longitude !== "number") return undefined;
+    if (Number.isNaN(raw.latitude) || Number.isNaN(raw.longitude)) return undefined;
+    return { latitude: raw.latitude, longitude: raw.longitude };
+}
+
 app.get("/api/health", (req: Request, res: Response) => {
     res.json({ ok: true, model: MODEL, keyConfigured: Boolean(process.env.GROQ_API_KEY) });
 });
@@ -532,7 +642,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
     }
 
     try {
-        const result = await runAgent(req.body.messages);
+        const result = await runAgent(req.body.messages, extractLocation(req.body));
         res.json(result);
     } catch (err) {
         console.error("Agent error:", err);
@@ -566,7 +676,7 @@ app.post("/api/chat/stream", async (req: Request, res: Response) => {
     const heartbeat = setInterval(() => res.write(": ping\n\n"), 15000);
 
     try {
-        await runAgentStream(req.body.messages, emit);
+        await runAgentStream(req.body.messages, emit, extractLocation(req.body));
     } catch (err) {
         console.error("Agent stream error:", err);
         const message = err instanceof Error ? err.message : "The agent failed to respond.";
