@@ -82,6 +82,7 @@ body {
   align-items: center;
   gap: 10px;
   min-width: 0;
+  cursor: pointer;
 }
 
 .brand-mark {
@@ -825,3 +826,12 @@ body {
         max-width: 100%; /* Spans full screen width on tiny mobile devices to maximize row readability */
     }
 }
+
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
+  opacity: 0.7;
+  cursor: pointer;
+}
+.brand:hover .back-btn { opacity: 1; }

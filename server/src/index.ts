@@ -58,6 +58,23 @@ interface WeatherResult {
     local_time: string;
 }
 
+interface ForecastDay {
+    date: string;
+    condition: string;
+    temp_max_c: number | null;
+    temp_min_c: number | null;
+    precipitation_probability_percent: number | null;
+    wind_kph: number | null;
+}
+
+interface ForecastResult {
+    location: string;
+    days_returned: number;
+    days_requested: number;
+    note: string | null;
+    forecast: ForecastDay[];
+}
+
 type Emit = (event: string, data: unknown) => void;
 
 interface AccumulatingToolCall {
@@ -106,6 +123,33 @@ const TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        type: "function",
+        function: {
+            name: "get_forecast",
+            description:
+                "Get a daily weather forecast for a city or place name (max/min temperature, condition, " +
+                "precipitation chance, wind). Ask for as many days as the user needs, even if that's weeks or " +
+                "a month out — the tool will return as many days as the weather provider can actually forecast " +
+                "and tell you if it had to return fewer than requested, along with why. Don't refuse a request " +
+                "just because it's far in the future; call the tool and let it report its real limits.",
+            parameters: {
+                type: "object",
+                properties: {
+                    location: {
+                        type: "string",
+                        description: "A city or place name, optionally with country, e.g. 'Bengaluru' or 'Paris, France'",
+                    },
+                    days: {
+                        type: "integer",
+                        description: "Number of days to forecast ahead. Defaults to 7 if omitted. Fine to ask for more than any known limit — the tool clamps and explains.",
+                        minimum: 1,
+                    },
+                },
+                required: ["location"],
+            },
+        },
+    },
 ] as const;
 
 const WEATHER_CODES: Record<number, string> = {
@@ -123,20 +167,7 @@ async function getWeather(location: string): Promise<WeatherResult> {
         throw new Error("A location is required.");
     }
 
-    const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=1&language=en&format=json`;
-    const geoRes = await fetch(geoUrl);
-    if (!geoRes.ok) throw new Error("Location lookup failed.");
-    const geo = await geoRes.json() as {
-        results?: Array<{
-            name: string;
-            admin1?: string;
-            country?: string;
-            latitude: number;
-            longitude: number;
-        }>;
-    };
-    const place = geo.results?.[0];
-    if (!place) throw new Error(`Couldn't find a place called "${location}".`);
+    const place = await geocode(location);
 
     const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${place.latitude}&longitude=${place.longitude}` + `&current=temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m,weather_code` + `&timezone=auto`;
     const weatherRes = await fetch(weatherUrl);
@@ -165,10 +196,117 @@ async function getWeather(location: string): Promise<WeatherResult> {
     };
 }
 
+async function fetchDailyForecast(lat: number, lon: number, days: number): Promise<{
+    time: string[];
+    weather_code: number[];
+    temperature_2m_max: number[];
+    temperature_2m_min: number[];
+    precipitation_probability_max: number[];
+    wind_speed_10m_max: number[];
+}> {
+    const url =
+        `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+        `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max` +
+        `&forecast_days=${days}&timezone=auto`;
+    const res = await fetch(url);
+
+    if (!res.ok) {
+        const body = await res.json().catch(() => null) as { reason?: string } | null;
+        const err = new Error(body?.reason || "Forecast lookup failed.");
+        (err as Error & { providerReason?: string }).providerReason = body?.reason;
+        throw err;
+    }
+
+    const data = await res.json() as { daily?: ForecastDaily };
+    if (!data.daily) throw new Error("No forecast data available for that location.");
+    return data.daily;
+}
+
+type ForecastDaily = {
+    time: string[];
+    weather_code: number[];
+    temperature_2m_max: number[];
+    temperature_2m_min: number[];
+    precipitation_probability_max: number[];
+    wind_speed_10m_max: number[];
+};
+
+// The provider caps how many days out it can forecast, but that cap isn't
+// something we hardcode — we ask for what the user actually wants, and if the
+// provider rejects it, its error message tells us the real current limit. We
+// retry once at that corrected value rather than assuming a fixed number, so
+// this keeps working correctly even if the provider's limit changes.
+async function getDailyForecastClamped(lat: number, lon: number, daysRequested: number): Promise<{ daily: ForecastDaily; daysServed: number }> {
+    try {
+        const daily = await fetchDailyForecast(lat, lon, daysRequested);
+        return { daily, daysServed: daysRequested };
+    } catch (err) {
+        const reason = (err as Error & { providerReason?: string }).providerReason || (err as Error).message || "";
+        const match = reason.match(/\b(\d+)\b(?!.*\b\d+\b)/); // last number mentioned, typically the max allowed
+        const discoveredLimit = match ? Number(match[1]) : null;
+
+        if (discoveredLimit && discoveredLimit < daysRequested) {
+            const daily = await fetchDailyForecast(lat, lon, discoveredLimit);
+            return { daily, daysServed: discoveredLimit };
+        }
+        throw err;
+    }
+}
+
+async function geocode(location: string): Promise<{ name: string; admin1?: string; country?: string; latitude: number; longitude: number }> {
+    const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=1&language=en&format=json`;
+    const geoRes = await fetch(geoUrl);
+    if (!geoRes.ok) throw new Error("Location lookup failed.");
+    const geo = await geoRes.json() as {
+        results?: Array<{ name: string; admin1?: string; country?: string; latitude: number; longitude: number }>;
+    };
+    const place = geo.results?.[0];
+    if (!place) throw new Error(`Couldn't find a place called "${location}".`);
+    return place;
+}
+
+async function getForecast(location: string, daysRequested: number): Promise<ForecastResult> {
+    if (!location || typeof location !== "string") {
+        throw new Error("A location is required.");
+    }
+
+    const requested = Math.max(1, daysRequested || 7);
+    const place = await geocode(location);
+    const { daily, daysServed } = await getDailyForecastClamped(place.latitude, place.longitude, requested);
+
+    const forecast: ForecastDay[] = daily.time.map((date, i) => ({
+        date,
+        condition: WEATHER_CODES[daily.weather_code[i]] || "unknown conditions",
+        temp_max_c: daily.temperature_2m_max?.[i] ?? null,
+        temp_min_c: daily.temperature_2m_min?.[i] ?? null,
+        precipitation_probability_percent: daily.precipitation_probability_max?.[i] ?? null,
+        wind_kph: daily.wind_speed_10m_max?.[i] ?? null,
+    }));
+
+    const daysReturned = forecast.length;
+    const note =
+        daysReturned < requested
+            ? `Only ${daysReturned} day(s) of forecast could be retrieved even though ${requested} were requested. ` +
+              `This is because weather models lose reliable day-by-day accuracy beyond a certain horizon — not a ` +
+              `limitation of this app. Mention this plainly to the user, offer the ${daysReturned}-day outlook you ` +
+              `do have, and suggest typical/seasonal conditions if they wanted something further out.`
+            : null;
+
+    return {
+        location: [place.name, place.admin1, place.country].filter(Boolean).join(", "),
+        days_returned: daysReturned,
+        days_requested: requested,
+        note,
+        forecast,
+    };
+}
+
 async function executeTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     switch (name) {
         case "get_weather":
             return await getWeather(args.location as string);
+        case "get_forecast":
+            return await getForecast(args.location as string, Number(args.days) || 7);
         default:
             throw new Error(`Unknown tool: ${name}`);
     }
@@ -203,7 +341,9 @@ async function callTool(name: string, argsRaw: string | undefined): Promise<{ ca
 // ---------------------------------------------------------------------------
 
 const SYSTEM_PROMPT = `You are Vayuniq, a rich weather assistant. You ONLY help with weather-related questions (current conditions, forecasts, comparisons, metrics).
-- Use the get_weather tool whenever it makes your answer more accurate.
+- Use the get_weather tool for current/real-time conditions.
+- Use the get_forecast tool for anything about upcoming days (tomorrow, this weekend, next week, next month, etc.). Pass however many days out the user is asking about — don't refuse just because it sounds far away; the tool itself will tell you how many days it could actually retrieve and why.
+- If the tool returns fewer days than requested (see its "note" field), that's because weather models lose reliable accuracy beyond a certain horizon — a physical limit of forecasting, not a limitation of this app. Explain that plainly, share the outlook you do have, and offer typical/seasonal conditions as a substitute for anything further out. Never just say "I can't predict future weather" with no explanation.
 - If the user asks anything that is not about weather, politely decline.
 - Think step by step, but only show your final answer to the user — do not narrate your reasoning process.
 
@@ -242,10 +382,26 @@ function latestUserMessage(conversation: ChatMessage[]): string {
     return "";
 }
 
+// Looks at the whole conversation so far, not just the newest message. This
+// lets contextual follow-ups like "what about next month" or "and tomorrow?"
+// pass the gate once weather context is established, instead of being
+// rejected just because that one sentence lacks a keyword. Scanning the full
+// conversation (rather than an arbitrary recent-N window) also avoids a
+// long-running chat sliding past its own established context and getting
+// incorrectly gated again later on.
+function isConversationWeatherRelated(conversation: ChatMessage[]): boolean {
+    const allText = conversation
+        .filter((m) => typeof m.content === "string")
+        .map((m) => m.content as string)
+        .join(" ");
+
+    return isWeatherRelated(allText);
+}
+
 const STEP_LIMIT_MESSAGE = "I wasn't able to finish reasoning about that within my step limit — try breaking the question down.";
 
 async function runAgent(conversation: ChatMessage[]): Promise<AgentResult> {
-    if (!isWeatherRelated(latestUserMessage(conversation))) {
+    if (!isConversationWeatherRelated(conversation)) {
         return { reply: OFF_TOPIC_REPLY, trace: [], model: MODEL };
     }
 
@@ -280,7 +436,7 @@ async function runAgent(conversation: ChatMessage[]): Promise<AgentResult> {
 }
 
 async function runAgentStream(conversation: ChatMessage[], emit: Emit): Promise<void> {
-    if (!isWeatherRelated(latestUserMessage(conversation))) {
+    if (!isConversationWeatherRelated(conversation)) {
         emit("token", { content: OFF_TOPIC_REPLY });
         emit("done", { reply: OFF_TOPIC_REPLY, trace: [], model: MODEL });
         return;

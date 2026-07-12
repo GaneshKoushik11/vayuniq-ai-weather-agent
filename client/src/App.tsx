@@ -439,6 +439,7 @@ export default function App() {
 
     const messagesRef = useRef<ChatMessage[]>(messages);
     const loadingRef = useRef(loading);
+    const abortRef = useRef<AbortController | null>(null);
 
     useEffect(() => {
         messagesRef.current = messages;
@@ -465,6 +466,9 @@ export default function App() {
 
         let processedLength = 0;
         let pending = "";
+
+        const controller = new AbortController();
+        abortRef.current = controller;
 
         const handleChunk = (progressEvent: AxiosProgressEvent) => {
             const xhr = progressEvent.event?.target as XMLHttpRequest;
@@ -498,14 +502,28 @@ export default function App() {
                     responseType: "text",
                     headers: { "Content-Type": "application/json" },
                     onDownloadProgress: handleChunk,
+                    signal: controller.signal,
                 }
             );
         } catch (err) {
+            if (axios.isCancel(err)) return; // reset/back was pressed mid-stream — not a real error
             const message = axios.isAxiosError(err) ? err.response?.data?.error ?? err.message : err instanceof Error ? err.message : "Something went wrong";
             patch((m) => ({ ...m, content: message, error: true, streaming: false }));
         } finally {
             setLoading(false);
+            if (abortRef.current === controller) abortRef.current = null;
         }
+    }, []);
+
+    // Clicking the logo/name resets to a fresh chat. If a stream is still
+    // in flight when that happens, cancel it first so a stale response
+    // can't land after the conversation has already been cleared.
+    const resetChat = useCallback(() => {
+        abortRef.current?.abort();
+        abortRef.current = null;
+        setMessages([]);
+        setInput("");
+        setLoading(false);
     }, []);
 
     const onKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -518,7 +536,29 @@ export default function App() {
     return (
         <div className="app">
             <header className="header">
-                <div className="brand">
+                <div
+                    className="brand"
+                    onClick={resetChat}
+                    role="button"
+                    tabIndex={0}
+                    aria-label="Start a new chat"
+                    onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            resetChat();
+                        }
+                    }}
+                >
+                    {messages.length > 0 && (
+                        <span
+                            className="back-btn"
+                            aria-hidden="true"
+                        >
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M15 18l-6-6 6-6" />
+                            </svg>
+                        </span>
+                    )}
                     <img className="brand-mark" src="/vayuniq.png" alt="Vayuniq" />
                     <span className="brand-name">VAYUNIQ</span>
                 </div>
