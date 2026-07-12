@@ -9,6 +9,6 @@ An intelligent, conversational weather assistant built using a modern full-stack
 * **Context-Aware Insights:** Goes beyond raw numbers to provide actionable recommendations (e.g., clothing suggestions, travel advice) based on live conditions.
 
 ### 💻 Tech Stack
-* **Frontend:** React, TypeScript (optional), CSS/Component Library
+* **Frontend:** React, TypeScript, CSS/Component Library
 * **Backend:** Node.js, Express
 * **AI Orchestration:** Groq SDK, Function/Tool Calling
